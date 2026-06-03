@@ -1,0 +1,195 @@
+## Cortex Analyst reads this file upon customer request. Cortex then generates SQL queries to answer the customer's question.
+name: Finance Analytics
+description: >
+  SaaS finance analytics semantic model for ARR, MRR, subscription lifecycle,
+  and revenue movement analysis across customers, subscriptions, and monthly revenue.
+
+tables:
+  - name: customers
+    description: Customer master records with company profile, industry, and plan tier.
+    base_table:
+      database: finance_analytics
+      schema: core
+      table: customers
+    primary_key:
+      columns:
+        - customer_id
+    dimensions:
+      - name: customer_id
+        description: Unique identifier for each customer.
+        expr: customer_id
+        data_type: NUMBER
+        unique: true
+      - name: company_name
+        description: Legal or display name of the customer company.
+        expr: company_name
+        data_type: VARCHAR
+        synonyms:
+          - account name
+          - customer name
+      - name: industry
+        description: Industry vertical of the customer company.
+        expr: industry
+        data_type: VARCHAR
+      - name: plan_tier
+        description: Current subscription plan tier for the customer.
+        expr: plan_tier
+        data_type: VARCHAR
+        synonyms:
+          - plan
+          - tier
+          - subscription tier
+    time_dimensions:
+      - name: signup_date
+        description: Date the customer signed up for the product.
+        expr: signup_date
+        data_type: DATE
+        synonyms:
+          - registration date
+          - onboarding date
+
+  - name: subscriptions
+    description: >
+      Subscription contracts linking customers to annual contract value and lifecycle status.
+    base_table:
+      database: finance_analytics
+      schema: core
+      table: subscriptions
+    primary_key:
+      columns:
+        - subscription_id
+    dimensions:
+      - name: subscription_id
+        description: Unique identifier for each subscription.
+        expr: subscription_id
+        data_type: NUMBER
+        unique: true
+      - name: customer_id
+        description: Foreign key to the customer who owns this subscription.
+        expr: customer_id
+        data_type: NUMBER
+      - name: status
+        description: Subscription lifecycle status.
+        expr: status
+        data_type: VARCHAR
+        is_enum: true
+        sample_values:
+          - active
+          - churned
+        synonyms:
+          - subscription status
+          - contract status
+    time_dimensions:
+      - name: start_date
+        description: Date the subscription contract started.
+        expr: start_date
+        data_type: DATE
+      - name: end_date
+        description: Date the subscription contract ended, if applicable.
+        expr: end_date
+        data_type: DATE
+    facts:
+      - name: annual_contract_value
+        description: Annual contract value (ACV) for the subscription in dollars.
+        expr: annual_contract_values
+        data_type: NUMBER
+        synonyms:
+          - ACV
+          - contract value
+          - ARR per subscription
+    metrics:
+      - name: total_arr
+        description: Total annual recurring revenue from active subscriptions.
+        expr: SUM(CASE WHEN status = 'active' THEN annual_contract_values ELSE 0 END)
+        synonyms:
+          - ARR
+          - annual recurring revenue
+          - total annual recurring revenue
+
+  - name: monthly_revenue
+    description: >
+      Monthly recurring revenue by customer, including revenue movement type
+      (new, renewal, expansion, contraction, churn).
+    base_table:
+      database: finance_analytics
+      schema: core
+      table: monthly_revenue
+    primary_key:
+      columns:
+        - customer_id
+        - revenue_month
+    dimensions:
+      - name: customer_id
+        description: Foreign key to the customer associated with this revenue record.
+        expr: customer_id
+        data_type: NUMBER
+      - name: revenue_type
+        description: Category of revenue movement for the month.
+        expr: revenue_type
+        data_type: VARCHAR
+        is_enum: true
+        sample_values:
+          - new
+          - renewal
+          - expansion
+          - contraction
+          - churn
+        synonyms:
+          - revenue movement
+          - MRR movement type
+    time_dimensions:
+      - name: revenue_month
+        description: Calendar month the revenue amount applies to.
+        expr: revenue_month
+        data_type: DATE
+        synonyms:
+          - month
+          - reporting month
+    facts:
+      - name: mrr
+        description: Monthly recurring revenue amount in dollars.
+        expr: mrr
+        data_type: NUMBER
+        synonyms:
+          - monthly recurring revenue
+    metrics:
+      - name: total_mrr
+        description: Sum of MRR excluding zero values.
+        expr: SUM(CASE WHEN mrr <> 0 THEN mrr ELSE NULL END)
+        synonyms:
+          - MRR
+          - total monthly recurring revenue
+      - name: churned_customers
+        description: Count of distinct customers with churn revenue type.
+        expr: COUNT(DISTINCT CASE WHEN revenue_type = 'churn' THEN customer_id END)
+        synonyms:
+          - churn count
+          - customers churned
+
+relationships:
+  - name: subscriptions_to_customers
+    left_table: subscriptions
+    right_table: customers
+    relationship_columns:
+      - left_column: customer_id
+        right_column: customer_id
+    join_type: left_outer
+    relationship_type: many_to_one
+
+  - name: monthly_revenue_to_customers
+    left_table: monthly_revenue
+    right_table: customers
+    relationship_columns:
+      - left_column: customer_id
+        right_column: customer_id
+    join_type: left_outer
+    relationship_type: many_to_one
+
+module_custom_instructions:
+  sql_generation: |
+    When calculating ARR, use only subscriptions where status = 'active'.
+    When calculating MRR totals, exclude rows where mrr = 0.
+    When counting churned customers, filter monthly_revenue where revenue_type = 'churn'
+    and count distinct customer_id.
+    Revenue type values are lowercase: new, renewal, expansion, contraction, churn.
+    Subscription status values are lowercase: active, churned.

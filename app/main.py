@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import requests
 import streamlit as st
 from streamlit.connections import SnowflakeConnection
@@ -24,12 +25,12 @@ SEMANTIC_MODEL_PATH = (
 
 ARR_TREND_SQL = """
 SELECT
-    revenue_month,
-    SUM(mrr) * 12 AS arr
-FROM finance_analytics.core.monthly_revenue
-WHERE mrr > 0
-GROUP BY revenue_month
-ORDER BY revenue_month
+    DATE_TRUNC('month', START_DATE) AS start_month,
+    SUM(ANNUAL_CONTRACT_VALUE) AS total_arr
+FROM FINANCE_ANALYTICS.CORE.SUBSCRIPTIONS
+WHERE STATUS = 'active'
+GROUP BY DATE_TRUNC('month', START_DATE)
+ORDER BY start_month
 """
 
 NRR_BY_COHORT_SQL = """
@@ -38,7 +39,7 @@ WITH customer_first_month AS (
         customer_id,
         MIN(revenue_month) AS cohort_month,
         SUM(mrr) AS first_mrr
-    FROM finance_analytics.core.monthly_revenue
+    FROM FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE
     WHERE mrr > 0
     GROUP BY customer_id
 ),
@@ -47,7 +48,7 @@ customer_latest_month AS (
         customer_id,
         MAX(revenue_month) AS latest_month,
         SUM(mrr) AS latest_mrr
-    FROM finance_analytics.core.monthly_revenue
+    FROM FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE
     GROUP BY customer_id
 )
 SELECT
@@ -75,7 +76,7 @@ WITH active_customers AS (
             PARTITION BY customer_id
             ORDER BY revenue_month
         ) AS prior_mrr
-    FROM finance_analytics.core.monthly_revenue
+    FROM FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE
 ),
 churn_flags AS (
     SELECT
@@ -257,7 +258,7 @@ def handle_question_submit(question: str) -> None:
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading ARR trend...")
 def fetch_arr_trend() -> pd.DataFrame:
-    """Fetch monthly ARR trend derived from MRR."""
+    """Fetch monthly ARR trend from active subscriptions."""
     conn = get_snowflake_connection()
     return conn.query(ARR_TREND_SQL, ttl=0)
 
@@ -313,20 +314,106 @@ def render_ask_question_tab() -> None:
         st.warning(last_result)
 
 
-def render_dashboard_section(title: str) -> None:
-    """Render a dashboard section with a placeholder chart message."""
-    st.subheader(title)
-    st.info("Chart coming soon")
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of the dataframe with lowercase column names."""
+    normalized = df.copy()
+    normalized.columns = [str(col).lower() for col in normalized.columns]
+    return normalized
+
+
+def render_arr_trend_chart() -> None:
+    """Render ARR over time from active subscriptions."""
+    st.subheader("ARR Trend")
+    try:
+        df = _normalize_columns(fetch_arr_trend())
+        if df.empty:
+            st.info("No active subscription data available.")
+            return
+
+        fig = px.line(
+            df,
+            x="start_month",
+            y="total_arr",
+            title="ARR Trend by Subscription Start Month",
+            labels={
+                "start_month": "Subscription Start Month",
+                "total_arr": "Total ARR ($)",
+            },
+            markers=True,
+        )
+        fig.update_layout(hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        st.error(f"Unable to load ARR trend: {exc}")
+
+
+def render_nrr_by_cohort_chart() -> None:
+    """Render net revenue retention by signup cohort."""
+    st.subheader("NRR by Cohort")
+    try:
+        df = _normalize_columns(fetch_nrr_by_cohort())
+        if df.empty:
+            st.info("No cohort data available.")
+            return
+
+        fig = px.bar(
+            df,
+            x="cohort_month",
+            y="nrr_pct",
+            title="Net Revenue Retention by Cohort",
+            labels={
+                "cohort_month": "Cohort Month",
+                "nrr_pct": "NRR (%)",
+            },
+        )
+        fig.add_hline(
+            y=100,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="100% break-even",
+            annotation_position="top right",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        st.error(f"Unable to load NRR by cohort: {exc}")
+
+
+def render_churn_rate_chart() -> None:
+    """Render monthly customer churn rate."""
+    st.subheader("Churn Rate")
+    try:
+        df = _normalize_columns(fetch_churn_rate())
+        if df.empty:
+            st.info("No churn data available.")
+            return
+
+        fig = px.line(
+            df,
+            x="revenue_month",
+            y="churn_rate_pct",
+            title="Monthly Customer Churn Rate",
+            labels={
+                "revenue_month": "Revenue Month",
+                "churn_rate_pct": "Churn Rate (%)",
+            },
+            markers=True,
+        )
+        fig.update_layout(hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        st.error(f"Unable to load churn rate: {exc}")
 
 
 def render_dashboards_tab() -> None:
-    """Render dashboard placeholders for future chart integration."""
+    """Render executive dashboard charts."""
     st.subheader("Dashboards")
     st.caption("Executive views for ARR, retention, and churn.")
 
-    render_dashboard_section("ARR Trend")
-    render_dashboard_section("NRR by Cohort")
-    render_dashboard_section("Churn Rate")
+    render_arr_trend_chart()
+    st.divider()
+    render_nrr_by_cohort_chart()
+    st.divider()
+    render_churn_rate_chart()
 
 
 def main() -> None:

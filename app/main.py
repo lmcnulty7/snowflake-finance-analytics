@@ -123,6 +123,13 @@ def run_sql(sql: str) -> pd.DataFrame:
             ).any()
             if has_decimal:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    date_column_names = {"cohort_month", "revenue_month", "start_month"}
+    for col in df.columns:
+        col_name = str(col).lower()
+        if col_name.endswith("_month") or col_name in date_column_names:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
     return df
 
 
@@ -286,8 +293,6 @@ def render_arr_trend_chart() -> None:
     st.subheader("ARR Trend")
     try:
         df = _normalize_columns(fetch_arr_trend())
-        st.dataframe(df)
-        st.write(df.dtypes)
         if df.empty:
             st.info("No active subscription data available.")
             return
@@ -314,8 +319,6 @@ def render_nrr_by_cohort_chart() -> None:
     st.subheader("NRR by Cohort")
     try:
         df = _normalize_columns(fetch_nrr_by_cohort())
-        st.dataframe(df)
-        st.write(df.dtypes)
         if df.empty:
             st.info("No cohort data available.")
             return
@@ -347,8 +350,6 @@ def render_churn_rate_chart() -> None:
     st.subheader("Churn Rate")
     try:
         df = _normalize_columns(fetch_churn_rate())
-        st.dataframe(df)
-        st.write(df.dtypes)
         if df.empty:
             st.info("No churn data available.")
             return

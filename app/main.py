@@ -286,6 +286,8 @@ def render_arr_trend_chart() -> None:
     st.subheader("ARR Trend")
     try:
         df = _normalize_columns(fetch_arr_trend())
+        st.dataframe(df)
+        st.write(df.dtypes)
         if df.empty:
             st.info("No active subscription data available.")
             return
@@ -312,6 +314,8 @@ def render_nrr_by_cohort_chart() -> None:
     st.subheader("NRR by Cohort")
     try:
         df = _normalize_columns(fetch_nrr_by_cohort())
+        st.dataframe(df)
+        st.write(df.dtypes)
         if df.empty:
             st.info("No cohort data available.")
             return
@@ -343,6 +347,8 @@ def render_churn_rate_chart() -> None:
     st.subheader("Churn Rate")
     try:
         df = _normalize_columns(fetch_churn_rate())
+        st.dataframe(df)
+        st.write(df.dtypes)
         if df.empty:
             st.info("No churn data available.")
             return

@@ -10,7 +10,6 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
-from streamlit.connections import SnowflakeConnection
 
 APP_TITLE = "Finance Analytics"
 SESSION_LAST_QUESTION = "last_question"
@@ -112,7 +111,7 @@ def init_session_state() -> None:
         st.session_state[SESSION_LAST_RESULT] = None
 
 
-def get_snowflake_connection() -> SnowflakeConnection:
+def get_snowflake_connection() -> Any:
     """Return the Snowflake connection (automatic in Streamlit in Snowflake)."""
     return st.connection("snowflake")
 
@@ -134,13 +133,13 @@ def load_semantic_model() -> str:
     return content
 
 
-def build_cortex_analyst_url(conn: SnowflakeConnection) -> str:
+def build_cortex_analyst_url(conn: Any) -> str:
     """Build the Cortex Analyst REST API URL for the connected account."""
     host = conn.raw_connection.host
     return f"https://{host}{CORTEX_ANALYST_API_PATH}"
 
 
-def build_cortex_analyst_headers(conn: SnowflakeConnection) -> dict[str, str]:
+def build_cortex_analyst_headers(conn: Any) -> dict[str, str]:
     """Build authorization headers for the Cortex Analyst REST API."""
     token = conn.raw_connection.rest.token
     return {
@@ -153,7 +152,7 @@ def build_cortex_analyst_headers(conn: SnowflakeConnection) -> dict[str, str]:
 def call_cortex_analyst(
     question: str,
     semantic_model: str,
-    conn: SnowflakeConnection,
+    conn: Any,
 ) -> dict[str, Any]:
     """Send a natural-language question and semantic model to Cortex Analyst."""
     request_body = {

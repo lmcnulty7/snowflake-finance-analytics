@@ -10,6 +10,9 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from snowflake.snowpark.context import get_active_session
+
+session = get_active_session()
 
 APP_TITLE = "Finance Analytics"
 SESSION_LAST_QUESTION = "last_question"
@@ -111,16 +114,14 @@ def init_session_state() -> None:
         st.session_state[SESSION_LAST_RESULT] = None
 
 
-def get_snowflake_connection() -> Any:
-    """Return the Snowflake connection (automatic in Streamlit in Snowflake)."""
-    return st.connection("snowflake")
+def run_sql(sql: str) -> pd.DataFrame:
+    """Execute SQL against Snowflake and return a pandas DataFrame."""
+    return session.sql(sql).to_pandas()
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading semantic model...")
 def load_semantic_model() -> str:
     """Read the Cortex Analyst semantic model YAML from a Snowflake stage."""
-    conn = get_snowflake_connection()
-    session = conn.session()
     try:
         with session.file.get_stream(SEMANTIC_MODEL_STAGE_PATH) as stream:
             content = stream.read().decode("utf-8")
@@ -133,15 +134,15 @@ def load_semantic_model() -> str:
     return content
 
 
-def build_cortex_analyst_url(conn: Any) -> str:
+def build_cortex_analyst_url() -> str:
     """Build the Cortex Analyst REST API URL for the connected account."""
-    host = conn.raw_connection.host
+    host = session.connection.host
     return f"https://{host}{CORTEX_ANALYST_API_PATH}"
 
 
-def build_cortex_analyst_headers(conn: Any) -> dict[str, str]:
+def build_cortex_analyst_headers() -> dict[str, str]:
     """Build authorization headers for the Cortex Analyst REST API."""
-    token = conn.raw_connection.rest.token
+    token = session.connection.rest.token
     return {
         "Authorization": f'Snowflake Token="{token}"',
         "Content-Type": "application/json",
@@ -152,7 +153,6 @@ def build_cortex_analyst_headers(conn: Any) -> dict[str, str]:
 def call_cortex_analyst(
     question: str,
     semantic_model: str,
-    conn: Any,
 ) -> dict[str, Any]:
     """Send a natural-language question and semantic model to Cortex Analyst."""
     request_body = {
@@ -165,9 +165,9 @@ def call_cortex_analyst(
         "semantic_model": semantic_model,
     }
     response = requests.post(
-        build_cortex_analyst_url(conn),
+        build_cortex_analyst_url(),
         json=request_body,
-        headers=build_cortex_analyst_headers(conn),
+        headers=build_cortex_analyst_headers(),
         timeout=API_TIMEOUT_SECONDS,
     )
     if response.status_code >= 400:
@@ -225,11 +225,10 @@ def handle_question_submit(question: str) -> None:
     st.session_state[SESSION_LAST_QUESTION] = question
 
     try:
-        conn = get_snowflake_connection()
         semantic_model = load_semantic_model()
 
         with st.spinner("Asking Cortex Analyst..."):
-            analyst_response = call_cortex_analyst(question, semantic_model, conn)
+            analyst_response = call_cortex_analyst(question, semantic_model)
 
         sql = extract_sql_from_analyst_response(analyst_response)
         if sql is None:
@@ -239,7 +238,7 @@ def handle_question_submit(question: str) -> None:
             return
 
         with st.spinner("Running query..."):
-            result_df = conn.query(sql, ttl=0)
+            result_df = run_sql(sql)
 
         st.session_state[SESSION_LAST_RESULT] = result_df
 
@@ -262,22 +261,19 @@ def handle_question_submit(question: str) -> None:
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading ARR trend...")
 def fetch_arr_trend() -> pd.DataFrame:
     """Fetch monthly ARR trend from active subscriptions."""
-    conn = get_snowflake_connection()
-    return conn.query(ARR_TREND_SQL, ttl=0)
+    return run_sql(ARR_TREND_SQL)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading NRR by cohort...")
 def fetch_nrr_by_cohort() -> pd.DataFrame:
     """Fetch net revenue retention by signup cohort."""
-    conn = get_snowflake_connection()
-    return conn.query(NRR_BY_COHORT_SQL, ttl=0)
+    return run_sql(NRR_BY_COHORT_SQL)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading churn rate...")
 def fetch_churn_rate() -> pd.DataFrame:
     """Fetch monthly customer churn rate."""
-    conn = get_snowflake_connection()
-    return conn.query(CHURN_RATE_SQL, ttl=0)
+    return run_sql(CHURN_RATE_SQL)
 
 
 def render_ask_question_tab() -> None:

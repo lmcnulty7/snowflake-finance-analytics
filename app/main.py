@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import _snowflake
@@ -114,7 +115,15 @@ def init_session_state() -> None:
 
 def run_sql(sql: str) -> pd.DataFrame:
     """Execute SQL against Snowflake and return a pandas DataFrame."""
-    return session.sql(sql).to_pandas()
+    df = session.sql(sql).to_pandas()
+    for col in df.columns:
+        if df[col].dtype == object:
+            has_decimal = df[col].map(
+                lambda value: isinstance(value, Decimal) if pd.notna(value) else False
+            ).any()
+            if has_decimal:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
 
 def call_cortex_analyst(question: str) -> dict[str, Any]:

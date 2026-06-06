@@ -6,9 +6,9 @@ import json
 from datetime import timedelta
 from typing import Any
 
+import _snowflake
 import pandas as pd
 import plotly.express as px
-import requests
 import streamlit as st
 from snowflake.snowpark.context import get_active_session
 
@@ -18,11 +18,9 @@ APP_TITLE = "Finance Analytics"
 SESSION_LAST_QUESTION = "last_question"
 SESSION_LAST_RESULT = "last_result"
 CACHE_TTL = timedelta(minutes=10)
-CORTEX_ANALYST_API_PATH = "/api/v2/cortex/analyst/message"
-API_TIMEOUT_SECONDS = 60
-SEMANTIC_MODEL_STAGE_PATH = (
-    "@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml"
-)
+CORTEX_ANALYST_API_ENDPOINT = "/api/v2/cortex/analyst/message"
+API_TIMEOUT_MS = 30000
+SEMANTIC_MODEL_FILE = "@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml"
 
 ARR_TREND_SQL = """
 SELECT
@@ -119,42 +117,8 @@ def run_sql(sql: str) -> pd.DataFrame:
     return session.sql(sql).to_pandas()
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading semantic model...")
-def load_semantic_model() -> str:
-    """Read the Cortex Analyst semantic model YAML from a Snowflake stage."""
-    try:
-        with session.file.get_stream(SEMANTIC_MODEL_STAGE_PATH) as stream:
-            content = stream.read().decode("utf-8")
-    except Exception as exc:
-        raise FileNotFoundError(
-            f"Semantic model not found at {SEMANTIC_MODEL_STAGE_PATH}"
-        ) from exc
-    if not content.strip():
-        raise ValueError(f"Semantic model at {SEMANTIC_MODEL_STAGE_PATH} is empty.")
-    return content
-
-
-def build_cortex_analyst_url() -> str:
-    """Build the Cortex Analyst REST API URL for the connected account."""
-    host = session.connection.host
-    return f"https://{host}{CORTEX_ANALYST_API_PATH}"
-
-
-def build_cortex_analyst_headers() -> dict[str, str]:
-    """Build authorization headers for the Cortex Analyst REST API."""
-    token = session.connection.rest.token
-    return {
-        "Authorization": f'Snowflake Token="{token}"',
-        "Content-Type": "application/json",
-        "X-Snowflake-Authorization-Token-Type": "SESSION",
-    }
-
-
-def call_cortex_analyst(
-    question: str,
-    semantic_model: str,
-) -> dict[str, Any]:
-    """Send a natural-language question and semantic model to Cortex Analyst."""
+def call_cortex_analyst(question: str) -> dict[str, Any]:
+    """Send a natural-language question to Cortex Analyst via _snowflake."""
     request_body = {
         "messages": [
             {
@@ -162,24 +126,24 @@ def call_cortex_analyst(
                 "content": [{"type": "text", "text": question}],
             }
         ],
-        "semantic_model": semantic_model,
+        "semantic_model_file": SEMANTIC_MODEL_FILE,
     }
-    response = requests.post(
-        build_cortex_analyst_url(),
-        json=request_body,
-        headers=build_cortex_analyst_headers(),
-        timeout=API_TIMEOUT_SECONDS,
+    resp = _snowflake.send_snow_api_request(
+        "POST",
+        CORTEX_ANALYST_API_ENDPOINT,
+        {},
+        {},
+        request_body,
+        {},
+        API_TIMEOUT_MS,
     )
-    if response.status_code >= 400:
-        try:
-            payload = response.json()
-            detail = payload.get("message", response.text)
-        except json.JSONDecodeError:
-            detail = response.text
+    result = json.loads(resp["content"])
+    if resp["status"] >= 400:
+        detail = result.get("message", resp["content"])
         raise RuntimeError(
-            f"Cortex Analyst request failed ({response.status_code}): {detail}"
+            f"Cortex Analyst request failed ({resp['status']}): {detail}"
         )
-    return response.json()
+    return result
 
 
 def extract_sql_from_analyst_response(response: dict[str, Any]) -> str | None:
@@ -225,10 +189,8 @@ def handle_question_submit(question: str) -> None:
     st.session_state[SESSION_LAST_QUESTION] = question
 
     try:
-        semantic_model = load_semantic_model()
-
         with st.spinner("Asking Cortex Analyst..."):
-            analyst_response = call_cortex_analyst(question, semantic_model)
+            analyst_response = call_cortex_analyst(question)
 
         sql = extract_sql_from_analyst_response(analyst_response)
         if sql is None:
@@ -242,16 +204,6 @@ def handle_question_submit(question: str) -> None:
 
         st.session_state[SESSION_LAST_RESULT] = result_df
 
-    except FileNotFoundError:
-        st.session_state[SESSION_LAST_RESULT] = (
-            "The semantic model file could not be found on stage. "
-            "Check that @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml exists."
-        )
-    except requests.RequestException:
-        st.session_state[SESSION_LAST_RESULT] = (
-            "Unable to reach Cortex Analyst. Check your network connection "
-            "and Snowflake credentials, then try again."
-        )
     except Exception as exc:
         st.session_state[SESSION_LAST_RESULT] = (
             f"Something went wrong while processing your question: {exc}"

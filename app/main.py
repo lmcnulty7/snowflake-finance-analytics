@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,8 +18,8 @@ SESSION_LAST_RESULT = "last_result"
 CACHE_TTL = timedelta(minutes=10)
 CORTEX_ANALYST_API_PATH = "/api/v2/cortex/analyst/message"
 API_TIMEOUT_SECONDS = 60
-SEMANTIC_MODEL_PATH = (
-    Path(__file__).resolve().parent.parent / "semantic_model" / "finance_model.yaml"
+SEMANTIC_MODEL_STAGE_PATH = (
+    "@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml"
 )
 
 ARR_TREND_SQL = """
@@ -114,17 +113,25 @@ def init_session_state() -> None:
 
 
 def get_snowflake_connection() -> SnowflakeConnection:
-    """Return the Snowflake connection configured in secrets or connections.toml."""
-    return st.connection("snowflake", type="snowflake")
+    """Return the Snowflake connection (automatic in Streamlit in Snowflake)."""
+    return st.connection("snowflake")
 
 
-@st.cache_data(show_spinner=False)
-def load_semantic_model(model_path: str, _mtime_ns: int) -> str:
-    """Read the Cortex Analyst semantic model YAML from disk."""
-    path = Path(model_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Semantic model not found: {path}")
-    return path.read_text(encoding="utf-8")
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading semantic model...")
+def load_semantic_model() -> str:
+    """Read the Cortex Analyst semantic model YAML from a Snowflake stage."""
+    conn = get_snowflake_connection()
+    session = conn.session()
+    try:
+        with session.file.get_stream(SEMANTIC_MODEL_STAGE_PATH) as stream:
+            content = stream.read().decode("utf-8")
+    except Exception as exc:
+        raise FileNotFoundError(
+            f"Semantic model not found at {SEMANTIC_MODEL_STAGE_PATH}"
+        ) from exc
+    if not content.strip():
+        raise ValueError(f"Semantic model at {SEMANTIC_MODEL_STAGE_PATH} is empty.")
+    return content
 
 
 def build_cortex_analyst_url(conn: SnowflakeConnection) -> str:
@@ -220,10 +227,7 @@ def handle_question_submit(question: str) -> None:
 
     try:
         conn = get_snowflake_connection()
-        semantic_model = load_semantic_model(
-            str(SEMANTIC_MODEL_PATH),
-            SEMANTIC_MODEL_PATH.stat().st_mtime_ns,
-        )
+        semantic_model = load_semantic_model()
 
         with st.spinner("Asking Cortex Analyst..."):
             analyst_response = call_cortex_analyst(question, semantic_model, conn)
@@ -242,8 +246,8 @@ def handle_question_submit(question: str) -> None:
 
     except FileNotFoundError:
         st.session_state[SESSION_LAST_RESULT] = (
-            "The semantic model file could not be found. "
-            "Check that semantic_model/finance_model.yaml exists."
+            "The semantic model file could not be found on stage. "
+            "Check that @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml exists."
         )
     except requests.RequestException:
         st.session_state[SESSION_LAST_RESULT] = (

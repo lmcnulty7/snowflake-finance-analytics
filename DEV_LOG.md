@@ -16,4 +16,17 @@ Wired Cortex Analyst into Ask a Question tab:
 - Lesson: always check actual Snowflake object names with SHOW TABLES and 
   DESC TABLE before writing a semantic model
 
-  
+  ## 2026-06-06
+- Verified all three core metrics working: total ARR, MRR by month, churned customers
+- Built three live dashboard charts using Plotly:
+  - ARR Trend: line chart showing total annual contract value by subscription 
+    start month — gives a snapshot of when revenue was committed over time
+  - NRR by Cohort: bar chart showing net revenue retention percentage per 
+    cohort month with a 100% break-even reference line — shows whether each 
+    customer cohort is expanding, flat, or contracting over time
+  - Churn Rate: line chart showing monthly customer churn rate as a percentage 
+    (identifies which months had customer losses)
+- Learned: st.cache_data prevents redundant Snowflake queries on every 
+  Streamlit rerender — important for credit management on trial account
+- App is functionally complete — Cortex Analyst + dashboards both working
+

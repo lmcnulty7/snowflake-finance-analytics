@@ -1,4 +1,9 @@
-"""Finance Analytics Streamlit application."""
+"""Finance Analytics Streamlit application.
+
+Includes an agentic Workflow tab that encodes a repeatable quarterly revenue
+briefing: SQL extraction, deterministic KPI computation in Python, and Cortex
+COMPLETE narration using only pre-computed figures.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +23,8 @@ session = get_active_session()
 APP_TITLE = "Finance Analytics"
 SESSION_LAST_QUESTION = "last_question"
 SESSION_LAST_RESULT = "last_result"
+SESSION_WORKFLOW_METRICS = "workflow_metrics"
+SESSION_WORKFLOW_NARRATIVE = "workflow_narrative"
 CACHE_TTL = timedelta(minutes=10)
 CORTEX_ANALYST_API_ENDPOINT = "/api/v2/cortex/analyst/message"
 API_TIMEOUT_MS = 30000
@@ -104,6 +111,18 @@ GROUP BY revenue_month
 ORDER BY revenue_month
 """
 
+ARR_BY_PLAN_TIER_SQL = """
+SELECT
+    c.plan_tier,
+    SUM(s.annual_contract_value) AS arr
+FROM FINANCE_ANALYTICS.CORE.SUBSCRIPTIONS s
+INNER JOIN FINANCE_ANALYTICS.CORE.CUSTOMERS c
+    ON s.customer_id = c.customer_id
+WHERE s.status = 'active'
+GROUP BY c.plan_tier
+ORDER BY arr DESC
+"""
+
 
 def init_session_state() -> None:
     """Initialize session state keys used by the app."""
@@ -111,6 +130,10 @@ def init_session_state() -> None:
         st.session_state[SESSION_LAST_QUESTION] = None
     if SESSION_LAST_RESULT not in st.session_state:
         st.session_state[SESSION_LAST_RESULT] = None
+    if SESSION_WORKFLOW_METRICS not in st.session_state:
+        st.session_state[SESSION_WORKFLOW_METRICS] = None
+    if SESSION_WORKFLOW_NARRATIVE not in st.session_state:
+        st.session_state[SESSION_WORKFLOW_NARRATIVE] = None
 
 
 def run_sql(sql: str) -> pd.DataFrame:
@@ -383,6 +406,229 @@ def render_dashboards_tab() -> None:
     render_churn_rate_chart()
 
 
+def compute_quarterly_revenue_metrics() -> dict[str, Any]:
+    """Run workflow SQL queries and compute deterministic KPIs in Python."""
+    arr_by_tier_df = _normalize_columns(run_sql(ARR_BY_PLAN_TIER_SQL))
+    nrr_df = _normalize_columns(run_sql(NRR_BY_COHORT_SQL))
+    arr_trend_df = _normalize_columns(run_sql(ARR_TREND_SQL))
+
+    if arr_by_tier_df.empty:
+        raise ValueError("No active subscription data found for ARR by plan tier.")
+
+    arr_by_tier = {
+        str(row["plan_tier"]): float(row["arr"])
+        for _, row in arr_by_tier_df.iterrows()
+    }
+    total_arr = float(sum(arr_by_tier.values()))
+
+    cohort_starting_mrr_total = (
+        float(nrr_df["cohort_starting_mrr"].sum()) if not nrr_df.empty else 0.0
+    )
+    cohort_current_mrr_total = (
+        float(nrr_df["cohort_current_mrr"].sum()) if not nrr_df.empty else 0.0
+    )
+    weighted_nrr_pct = (
+        (cohort_current_mrr_total / cohort_starting_mrr_total * 100)
+        if cohort_starting_mrr_total
+        else 0.0
+    )
+
+    top_3_tiers: list[dict[str, Any]] = []
+    for tier, tier_arr in sorted(arr_by_tier.items(), key=lambda item: item[1], reverse=True)[:3]:
+        contribution_pct = (tier_arr / total_arr * 100) if total_arr else 0.0
+        top_3_tiers.append(
+            {
+                "plan_tier": tier,
+                "arr": tier_arr,
+                "contribution_pct": contribution_pct,
+            }
+        )
+
+    arr_trend_points: list[dict[str, Any]] = []
+    if not arr_trend_df.empty:
+        trend_sorted = arr_trend_df.sort_values("start_month")
+        for _, row in trend_sorted.iterrows():
+            arr_trend_points.append(
+                {
+                    "start_month": row["start_month"].strftime("%Y-%m"),
+                    "total_arr": float(row["total_arr"]),
+                }
+            )
+
+    newest_cohort_arr = arr_trend_points[-1]["total_arr"] if arr_trend_points else total_arr
+    prior_cohort_arr = (
+        arr_trend_points[-2]["total_arr"] if len(arr_trend_points) > 1 else newest_cohort_arr
+    )
+    cohort_change_pct = (
+        ((newest_cohort_arr - prior_cohort_arr) / prior_cohort_arr * 100)
+        if prior_cohort_arr
+        else 0.0
+    )
+
+    return {
+        "total_arr": total_arr,
+        "arr_by_tier": arr_by_tier,
+        "weighted_nrr_pct": weighted_nrr_pct,
+        "top_3_tiers": top_3_tiers,
+        "arr_trend_points": arr_trend_points,
+        "newest_cohort_arr": newest_cohort_arr,
+        "cohort_change_pct": cohort_change_pct,
+    }
+
+
+def format_metrics_for_prompt(metrics: dict[str, Any]) -> str:
+    """Format pre-computed workflow metrics as a text block for Cortex COMPLETE."""
+    lines = [
+        f"Total ARR: ${metrics['total_arr']:,.2f}",
+        "",
+        "ARR by plan tier:",
+    ]
+    for tier, tier_arr in sorted(
+        metrics["arr_by_tier"].items(), key=lambda item: item[1], reverse=True
+    ):
+        contribution = (tier_arr / metrics["total_arr"] * 100) if metrics["total_arr"] else 0.0
+        lines.append(f"- {tier}: ${tier_arr:,.2f} ({contribution:.1f}% of total ARR)")
+
+    lines.extend(
+        [
+            "",
+            f"Weighted NRR (by cohort starting MRR): {metrics['weighted_nrr_pct']:.2f}%",
+            "",
+            "Top 3 plan tiers by ARR contribution:",
+        ]
+    )
+    for tier_info in metrics["top_3_tiers"]:
+        lines.append(
+            f"- {tier_info['plan_tier']}: ${tier_info['arr']:,.2f} "
+            f"({tier_info['contribution_pct']:.1f}% of total ARR)"
+        )
+
+    lines.extend(["", "ARR trend by subscription start month:"])
+    for point in metrics["arr_trend_points"]:
+        lines.append(f"- {point['start_month']}: ${point['total_arr']:,.2f}")
+
+    lines.extend(
+        [
+            "",
+            f"Newest start-month cohort ARR: ${metrics['newest_cohort_arr']:,.2f}",
+            f"Change vs prior start-month cohort: {metrics['cohort_change_pct']:.2f}%",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_quarterly_summary_prompt(metrics_text: str) -> str:
+    """Build a structured Cortex COMPLETE prompt using only pre-computed metrics."""
+    return f"""Context:
+You are a finance analyst briefing a CFO on quarterly revenue performance.
+
+Instructions:
+Write a 3-paragraph executive summary using ONLY the numbers provided below.
+Paragraph 1: headline ARR and trend direction.
+Paragraph 2: composition by plan tier and concentration.
+Paragraph 3: one risk and one opportunity grounded in the data.
+Do not compute new figures, estimate missing values, or invent metrics.
+
+Few-shot example:
+Input numbers:
+Total ARR: $1,200,000.00
+Weighted NRR (by cohort starting MRR): 108.50%
+Top tier: Enterprise at 55.0% of total ARR
+Newest start-month cohort ARR: $310,000.00
+Change vs prior start-month cohort: 4.20%
+
+Good summary:
+Total ARR stands at $1,200,000.00. The newest start-month cohort booked $310,000.00 in new ARR, up 4.20% versus the prior start-month cohort, indicating steady new-booking activity rather than a running ARR total.
+
+Revenue is concentrated in Enterprise, which contributes 55.0% of total ARR, indicating strong performance in the highest-value segment while other tiers provide diversification.
+
+The main risk is tier concentration if Enterprise growth slows, while the opportunity is to lift weighted NRR above 108.50% by expanding within existing cohorts.
+
+Output format:
+Exactly 3 paragraphs. No markdown, bullets, or headings.
+
+Provided numbers (use these only):
+{metrics_text}
+"""
+
+
+def _escape_sql_string(value: str) -> str:
+    """Escape single quotes for safe inclusion in a SQL string literal."""
+    return value.replace("'", "''")
+
+
+def generate_quarterly_narrative(metrics: dict[str, Any]) -> str:
+    """Call Cortex COMPLETE to narrate pre-computed quarterly revenue metrics."""
+    prompt = build_quarterly_summary_prompt(format_metrics_for_prompt(metrics))
+    result_df = session.sql(
+        "SELECT SNOWFLAKE.CORTEX.COMPLETE(?, ?) AS summary",
+        params=["mistral-large2", prompt],
+    ).to_pandas()
+    return str(result_df.iloc[0, 0]).strip()
+
+def run_quarterly_revenue_workflow() -> tuple[dict[str, Any], str]:
+    """Execute the quarterly revenue summary agentic workflow end to end."""
+    metrics = compute_quarterly_revenue_metrics()
+    narrative = generate_quarterly_narrative(metrics)
+    return metrics, narrative
+
+
+def render_workflow_tab() -> None:
+    """Render the agentic quarterly revenue summary workflow.
+
+    This tab encodes a repeatable finance process: pull ARR and NRR data from
+    Snowflake, compute KPIs deterministically in Python, then pass only those
+    figures to Cortex COMPLETE for executive narrative generation.
+    """
+    st.subheader("Workflow")
+    st.caption(
+        "Run a repeatable quarterly revenue briefing workflow with deterministic "
+        "metrics and AI-generated narrative."
+    )
+
+    if st.button(
+        "Generate Quarterly Revenue Summary",
+        type="primary",
+        key="generate_quarterly_summary",
+    ):
+        try:
+            with st.spinner("Running quarterly revenue workflow..."):
+                metrics, narrative = run_quarterly_revenue_workflow()
+            st.session_state[SESSION_WORKFLOW_METRICS] = metrics
+            st.session_state[SESSION_WORKFLOW_NARRATIVE] = narrative
+        except Exception as exc:
+            st.error(f"Workflow failed: {exc}")
+
+    metrics: dict[str, Any] | None = st.session_state[SESSION_WORKFLOW_METRICS]
+    narrative: str | None = st.session_state[SESSION_WORKFLOW_NARRATIVE]
+
+    if metrics is None:
+        st.info("Click the button above to generate a quarterly revenue summary.")
+        return
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Total ARR", f"${metrics['total_arr']:,.0f}")
+    metric_cols[1].metric("Weighted NRR", f"{metrics['weighted_nrr_pct']:.1f}%")
+    metric_cols[2].metric(
+        "Newest Cohort ARR",
+        f"${metrics['newest_cohort_arr']:,.0f}",
+        f"{metrics['cohort_change_pct']:+.1f}% vs prior start-month",
+    )
+    top_tier = metrics["top_3_tiers"][0] if metrics["top_3_tiers"] else None
+    metric_cols[3].metric(
+        "Top Tier Share",
+        f"{top_tier['contribution_pct']:.1f}%" if top_tier else "N/A",
+        top_tier["plan_tier"] if top_tier else None,
+    )
+
+    st.divider()
+    st.markdown("**Executive Summary**")
+    if narrative:
+        st.write(narrative)
+    else:
+        st.info("No narrative generated yet.")
+
+
 def main() -> None:
     """Run the Finance Analytics Streamlit app."""
     st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -390,13 +636,18 @@ def main() -> None:
 
     st.title(APP_TITLE)
 
-    ask_tab, dashboards_tab = st.tabs(["Ask a Question", "Dashboards"])
+    ask_tab, dashboards_tab, workflow_tab = st.tabs(
+        ["Ask a Question", "Dashboards", "Workflow"]
+    )
 
     with ask_tab:
         render_ask_question_tab()
 
     with dashboards_tab:
         render_dashboards_tab()
+
+    with workflow_tab:
+        render_workflow_tab()
 
 
 if __name__ == "__main__":

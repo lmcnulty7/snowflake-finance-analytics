@@ -30,3 +30,10 @@ Wired Cortex Analyst into Ask a Question tab:
   Streamlit rerender — important for credit management on trial account
 - App is functionally complete — Cortex Analyst + dashboards both working
 
+## 2026-06-07
+Deployed to Streamlit in Snowflake (live, shareable URL):
+- Migrated st.connection → Snowpark get_active_session() (st.connection unavailable in SiS)
+- Switched Cortex Analyst to native _snowflake.send_snow_api_request() — supported path, handles auth internally vs. reaching into private session internals
+- Packages must come from the snowflake Anaconda channel via environment.yml (SiS can't reach PyPI on trial); Anaconda syntax uses single = (plotly=5.24.1)
+- Key lesson: ALTER STREAMLIT SET MAIN_FILE only repoints the file — it does NOT rebuild the package environment. Only DROP + CREATE rebuilds from environment.yml. Earlier fixes weren't taking effect until I recreated the app.
+- App fully working: Cortex Analyst + 3 Plotly dashboards

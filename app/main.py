@@ -434,7 +434,14 @@ def compute_quarterly_revenue_metrics() -> dict[str, Any]:
     )
 
     top_3_tiers: list[dict[str, Any]] = []
-    for tier, tier_arr in sorted(arr_by_tier.items(), key=lambda item: item[1], reverse=True)[:3]:
+    sorted_tiers = sorted(arr_by_tier.items(), key=lambda item: item[1], reverse=True)
+    top_tier_arr = sorted_tiers[0][1] if sorted_tiers else 0.0
+    non_top_tier_combined_arr = total_arr - top_tier_arr
+    non_top_tier_combined_pct = (
+        (non_top_tier_combined_arr / total_arr * 100) if total_arr else 0.0
+    )
+
+    for tier, tier_arr in sorted_tiers[:3]:
         contribution_pct = (tier_arr / total_arr * 100) if total_arr else 0.0
         top_3_tiers.append(
             {
@@ -468,6 +475,8 @@ def compute_quarterly_revenue_metrics() -> dict[str, Any]:
     return {
         "total_arr": total_arr,
         "arr_by_tier": arr_by_tier,
+        "non_top_tier_combined_arr": non_top_tier_combined_arr,
+        "non_top_tier_combined_pct": non_top_tier_combined_pct,
         "weighted_nrr_pct": weighted_nrr_pct,
         "top_3_tiers": top_3_tiers,
         "arr_trend_points": arr_trend_points,
@@ -489,6 +498,12 @@ def format_metrics_for_prompt(metrics: dict[str, Any]) -> str:
         contribution = (tier_arr / metrics["total_arr"] * 100) if metrics["total_arr"] else 0.0
         lines.append(f"- {tier}: ${tier_arr:,.2f} ({contribution:.1f}% of total ARR)")
 
+    lines.append(
+        "All tiers excluding the top tier, combined: "
+        f"${metrics['non_top_tier_combined_arr']:,.2f} "
+        f"({metrics['non_top_tier_combined_pct']:.1f}% of total ARR)"
+    )
+
     lines.extend(
         [
             "",
@@ -503,7 +518,7 @@ def format_metrics_for_prompt(metrics: dict[str, Any]) -> str:
             f"({tier_info['contribution_pct']:.1f}% of total ARR)"
         )
 
-    lines.extend(["", "ARR trend by subscription start month:"])
+    lines.extend(["", "New ARR booked by subscription start month:"])
     for point in metrics["arr_trend_points"]:
         lines.append(f"- {point['start_month']}: ${point['total_arr']:,.2f}")
 
@@ -524,7 +539,8 @@ You are a finance analyst briefing a CFO on quarterly revenue performance.
 
 Instructions:
 Write a 3-paragraph executive summary using ONLY the numbers provided below.
-Paragraph 1: headline ARR and trend direction.
+Use only the figures provided below. Never add, subtract, or otherwise derive new numbers.
+Paragraph 1: headline ARR and recent new-booking activity.
 Paragraph 2: composition by plan tier and concentration.
 Paragraph 3: one risk and one opportunity grounded in the data.
 Do not compute new figures, estimate missing values, or invent metrics.
@@ -624,7 +640,7 @@ def render_workflow_tab() -> None:
     st.divider()
     st.markdown("**Executive Summary**")
     if narrative:
-        st.write(narrative)
+        st.markdown(narrative.replace("$", "\\$"))
     else:
         st.info("No narrative generated yet.")
 

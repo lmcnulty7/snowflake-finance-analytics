@@ -12,3 +12,10 @@ venv/
 env/
 ENV/
 .virtualenv/
+
+# OS and editor clutter
+.DS_Store
+.Rhistory
+
+# Large local media (demo video recordings)
+*.mov

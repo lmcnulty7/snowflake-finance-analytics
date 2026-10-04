@@ -42,33 +42,40 @@ ORDER BY start_month
 
 NRR_BY_COHORT_SQL = """
 WITH customer_first_month AS (
+    -- cohort = first month with revenue; starting MRR is the MRR in that month
     SELECT
         customer_id,
-        MIN(revenue_month) AS cohort_month,
-        SUM(mrr) AS first_mrr
+        MIN(revenue_month) AS cohort_month
     FROM FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE
     WHERE mrr > 0
     GROUP BY customer_id
 ),
 customer_latest_month AS (
+    -- current MRR is the MRR in the customer's latest recorded month (0 if churned)
     SELECT
         customer_id,
-        MAX(revenue_month) AS latest_month,
-        SUM(mrr) AS latest_mrr
+        MAX(revenue_month) AS latest_month
     FROM FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE
     GROUP BY customer_id
 )
 SELECT
     f.cohort_month,
     COUNT(f.customer_id) AS cohort_size,
-    SUM(f.first_mrr) AS cohort_starting_mrr,
-    SUM(l.latest_mrr) AS cohort_current_mrr,
+    SUM(first_rev.mrr) AS cohort_starting_mrr,
+    SUM(latest_rev.mrr) AS cohort_current_mrr,
     ROUND(
-        SUM(l.latest_mrr) / NULLIF(SUM(f.first_mrr), 0) * 100,
+        SUM(latest_rev.mrr) / NULLIF(SUM(first_rev.mrr), 0) * 100,
         2
     ) AS nrr_pct
 FROM customer_first_month f
-JOIN customer_latest_month l ON f.customer_id = l.customer_id
+JOIN FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE first_rev
+    ON first_rev.customer_id = f.customer_id
+   AND first_rev.revenue_month = f.cohort_month
+JOIN customer_latest_month l
+    ON l.customer_id = f.customer_id
+JOIN FINANCE_ANALYTICS.CORE.MONTHLY_REVENUE latest_rev
+    ON latest_rev.customer_id = l.customer_id
+   AND latest_rev.revenue_month = l.latest_month
 GROUP BY f.cohort_month
 ORDER BY f.cohort_month
 """

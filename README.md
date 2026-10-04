@@ -33,9 +33,9 @@ There are three Plotly charts, each built from a fixed SQL query and cached for 
 
 ![ARR Trend chart in the deployed app](screenshots/SS%20First%20run%20in%20Snowflake/Screenshot%202026-06-07%20at%2010.08.53%E2%80%AFAM.png)
 
-![NRR by Cohort chart with the 100% break-even line](screenshots/SS%20First%20run%20in%20Snowflake/Screenshot%202026-06-07%20at%2010.09.07%E2%80%AFAM.png)
+![NRR by Cohort chart with the 100% break-even line](screenshots/Updated%20NRR%20by%20Cohort%20SS.png)
 
-*Captured before the October 2026 NRR fix, when the query summed every month on both sides of the ratio and every cohort read 100%. On the demo data the corrected chart runs from 0% (two churned customers) to 112.5%, with a weighted NRR of 101.3%.*
+*After the October 2026 NRR fix: cohorts run from 0% (the April and August customers churned) to 112.5%, with a weighted NRR of 101.3%. Before it, every bar read 100%.*
 
 ### 3. Workflow: quarterly revenue briefing
 
@@ -168,7 +168,6 @@ From `DEV_LOG.md` and the commit history:
 ## Known limitations
 
 - **NRR horizon.** NRR compares each customer's first and latest recorded month, which spans only 2 to 3 months in the demo data, not a fixed 12-month window. Each demo cohort holds one customer.
-- **The NRR screenshot predates the fix** (see the caption above); retake it from the live app.
 
 ## License
 

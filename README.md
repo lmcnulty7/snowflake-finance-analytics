@@ -28,12 +28,14 @@ There are three Plotly charts, each built from a fixed SQL query and cached for 
 | Chart | What it measures |
 |---|---|
 | **ARR Trend** | Annual contract value of active subscriptions, grouped by subscription start month (new ARR booked per month, not a running total) |
-| **NRR by Cohort** | Customers grouped by first-revenue month; each cohort's "current" MRR as a percentage of its "starting" MRR, with a 100% break-even line (see [Known limitations](#known-limitations)) |
+| **NRR by Cohort** | Customers grouped by first-revenue month; each cohort's current MRR (each customer's MRR in their latest recorded month, 0 if churned) as a percentage of its starting MRR (MRR in the cohort month), with a 100% break-even line |
 | **Churn Rate** | Share of customers with a prior month on record whose MRR dropped from above zero to zero that month |
 
 ![ARR Trend chart in the deployed app](screenshots/SS%20First%20run%20in%20Snowflake/Screenshot%202026-06-07%20at%2010.08.53%E2%80%AFAM.png)
 
 ![NRR by Cohort chart with the 100% break-even line](screenshots/SS%20First%20run%20in%20Snowflake/Screenshot%202026-06-07%20at%2010.09.07%E2%80%AFAM.png)
+
+*Captured before the October 2026 NRR fix, when the query summed every month on both sides of the ratio and every cohort read 100%. On the demo data the corrected chart runs from 0% (two churned customers) to 112.5%, with a weighted NRR of 101.3%.*
 
 ### 3. Workflow: quarterly revenue briefing
 
@@ -82,11 +84,13 @@ Everything runs inside Snowflake: the app uses the active Snowpark session and t
 
 | Path | Contents |
 |---|---|
-| `app/main.py` | The Streamlit app (all three tabs) |
+| `app/main.py` | The Streamlit app (all three tabs); deployed to the stage as `streamlit_app.py` |
+| `app/environment.yml` | Package spec for the deployed app (Snowflake Anaconda channel: `plotly=5.24.1`) |
+| `app/pyproject.toml` | Project file stored with the deployed app (Python 3.11, `streamlit[snowflake]`, `plotly==5.24.1`) |
 | `semantic_model/finance_model.yaml` | Cortex Analyst semantic model |
 | `sql/metrics.sql` | Standalone metric queries: ARR by customer, MRR trend with month-over-month growth, NRR by cohort, monthly churn rate |
 | `.streamlit/secrets.toml.example` | Template for a local Snowflake connection (placeholders only) |
-| `data/sample_data.sql` | Empty placeholder; the demo data was loaded directly in Snowflake |
+| `data/sample_data.sql` | The demo dataset: table DDL and all rows for CUSTOMERS (10), SUBSCRIPTIONS (10) and MONTHLY_REVENUE (29), exported from Snowflake |
 | `screenshots/` | Screenshots from each build stage |
 | `DEV_LOG.md` | Day-by-day build log |
 
@@ -101,36 +105,33 @@ USE ROLE SYSADMIN;
 CREATE DATABASE IF NOT EXISTS FINANCE_ANALYTICS;
 CREATE SCHEMA IF NOT EXISTS FINANCE_ANALYTICS.CORE;
 
--- Create and load CUSTOMERS, SUBSCRIPTIONS and MONTHLY_REVENUE.
--- Column names and types are listed in semantic_model/finance_model.yaml.
+-- Create and load CUSTOMERS, SUBSCRIPTIONS and MONTHLY_REVENUE:
+-- run data/sample_data.sql (table DDL plus the demo rows).
 
 CREATE STAGE IF NOT EXISTS FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE;
 ```
 
-**2. Upload the semantic model and app files to the stage.** `PUT` runs from SnowSQL or the Snowflake CLI, not from a Snowsight worksheet. Use the absolute path to your clone, and keep `AUTO_COMPRESS=FALSE` so the YAML stays readable at the exact path the app expects (`@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml`):
+**2. Upload the semantic model and app files to the stage.** `PUT` runs from SnowSQL, the Snowflake CLI or a connector, not from a Snowsight worksheet. It keeps the local file name, so copy `app/main.py` to `streamlit_app.py` first (the name the deployed app runs). Use absolute paths, and keep `AUTO_COMPRESS=FALSE` so the files stay readable at the exact paths the app expects (for example `@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE/finance_model.yaml`):
+
+```bash
+cp app/main.py /tmp/streamlit_app.py
+```
 
 ```sql
 PUT 'file:///<path-to-clone>/semantic_model/finance_model.yaml' @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///<path-to-clone>/app/main.py'                       @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///<path-to-clone>/environment.yml'                   @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///tmp/streamlit_app.py'                              @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///<path-to-clone>/app/environment.yml'               @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///<path-to-clone>/app/pyproject.toml'                @FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
 ```
 
-`environment.yml` is not in this repo. SiS installs packages from the Snowflake Anaconda channel, not PyPI. Streamlit, pandas, and Snowpark come with the runtime; the app also needs Plotly. A minimal file (the DEV_LOG records `plotly=5.24.1`; Anaconda pins use a single `=`):
-
-```yaml
-name: sf_env
-channels:
-  - snowflake
-dependencies:
-  - plotly=5.24.1
-```
+SiS installs packages from the Snowflake Anaconda channel, not PyPI (Anaconda pins use a single `=`). Streamlit, pandas, and Snowpark come with the runtime; the app also needs Plotly, which `app/environment.yml` pins.
 
 **3. Create the Streamlit app.**
 
 ```sql
 CREATE STREAMLIT FINANCE_ANALYTICS.CORE.FINANCE_ANALYTICS_APP
   ROOT_LOCATION = '@FINANCE_ANALYTICS.CORE.STREAMLIT_STAGE'
-  MAIN_FILE = 'main.py'
+  MAIN_FILE = 'streamlit_app.py'
   QUERY_WAREHOUSE = <your_warehouse>;
 ```
 
@@ -146,7 +147,7 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 
 ## Data
 
-The data is a **synthetic SaaS dataset with 10 customers**, built for this demo (customers, subscriptions, and monthly revenue records with movement types: new, renewal, expansion, contraction, churn). It lives in a Snowflake account (`FINANCE_ANALYTICS.CORE`) and is not included in this repo. No real customer or company data is used.
+The data is a **synthetic SaaS dataset with 10 customers**, built for this demo (customers, subscriptions, and monthly revenue records with movement types: new, renewal, expansion, contraction, churn). It lives in a Snowflake account (`FINANCE_ANALYTICS.CORE`); `data/sample_data.sql` recreates it (DDL and every row). No real customer or company data is used.
 
 ## Key lessons
 
@@ -158,6 +159,7 @@ From `DEV_LOG.md` and the commit history:
   - Cortex Analyst is called through `_snowflake.send_snow_api_request()`, the supported path, which handles auth itself instead of reaching into private session internals.
 - **Packages come from the Snowflake Anaconda channel** via `environment.yml`, and `ALTER STREAMLIT SET MAIN_FILE` only repoints the file. Only `DROP` + `CREATE` rebuilds the environment; earlier fixes did not take effect until the app was recreated.
 - **Cache dashboard queries.** `st.cache_data` stops every Streamlit rerun from re-querying Snowflake, which matters for credits on a trial account.
+- **Check metrics against the raw rows by hand.** NRR read 100% for every cohort until a per-customer check showed both sides of the ratio summed the same months; it now compares MRR in the cohort month with MRR in the latest month.
 - **Let the LLM narrate, not calculate.** The model got the combined ARR of the non-top tiers wrong, so that figure moved into deterministic Python and the prompt now forbids deriving new numbers.
 - **Escape `$` in LLM output before `st.markdown`.** Streamlit reads paired dollar signs as LaTeX.
 - **Database creation needs the right role:** `SYSADMIN` works, `PUBLIC` does not.
@@ -165,7 +167,8 @@ From `DEV_LOG.md` and the commit history:
 
 ## Known limitations
 
-- **NRR always reads 100% on this dataset.** The NRR query (in `app/main.py` and `sql/metrics.sql`) computes both "starting" and "current" MRR as `SUM(mrr)` across all of a customer's months, not MRR in the cohort month and in the latest month. Without negative MRR rows the two sums are equal, which is why every cohort bar and the Weighted NRR tile show 100%. The fix is to take each customer's MRR at `cohort_month` and at `latest_month`.
+- **NRR horizon.** NRR compares each customer's first and latest recorded month, which spans only 2 to 3 months in the demo data, not a fixed 12-month window. Each demo cohort holds one customer.
+- **The NRR screenshot predates the fix** (see the caption above); retake it from the live app.
 
 ## License
 

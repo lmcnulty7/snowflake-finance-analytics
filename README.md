@@ -4,7 +4,7 @@
 
 A Streamlit in Snowflake (SiS) app for SaaS revenue analytics. Finance users can ask revenue questions in plain English, check three executive dashboards, and generate a quarterly revenue briefing. Python computes the numbers and a Snowflake Cortex LLM writes the narrative.
 
-**Demo video:** https://youtu.be/Ub1w8yCGPeU
+**Demo video:** [YouTube](https://youtu.be/Ub1w8yCGPeU) or [MP4 in this repo](screenshots/finance-analytics-demo.mp4) (2.5 min, no audio). Recorded in June 2026, before the NRR fix, so the NRR chart and the Weighted NRR tile in it read 100%.
 
 ![Ask a Question tab answering "What is the total ARR?" through Cortex Analyst](screenshots/SS%20First%20run%20in%20Snowflake/Screenshot%202026-06-06%20at%201.25.26%E2%80%AFPM.png)
 
@@ -91,7 +91,7 @@ Everything runs inside Snowflake: the app uses the active Snowpark session and t
 | `sql/metrics.sql` | Standalone metric queries: ARR by customer, MRR trend with month-over-month growth, NRR by cohort, monthly churn rate |
 | `.streamlit/secrets.toml.example` | Template for a local Snowflake connection (placeholders only) |
 | `data/sample_data.sql` | The demo dataset: table DDL and all rows for CUSTOMERS (10), SUBSCRIPTIONS (10) and MONTHLY_REVENUE (29), exported from Snowflake |
-| `screenshots/` | Screenshots from each build stage |
+| `screenshots/` | Screenshots from each build stage, plus the demo video (`finance-analytics-demo.mp4`) |
 | `DEV_LOG.md` | Day-by-day build log |
 
 ## Setup
